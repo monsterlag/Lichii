@@ -51,6 +51,7 @@ add_executable(tests
     video_core/maxwell_permute_lod.cpp
     video_core/submission_policy.cpp
     video_core/framebuffer_clear_layers.cpp
+    video_core/fragment_color_mask.cpp
     video_core/fire_emblem_upscale.cpp
     video_core/dlss_contract.cpp
     video_core/ampere_fast_fusion.cpp
@@ -95,6 +96,7 @@ add_executable(tests
     video_core/ampere_matrix.cpp
     video_core/spirv_software_matrix.cpp
     video_core/spirv_builtin_capabilities.cpp
+    video_core/spirv_min_max_denorms.cpp
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp
@@ -102,6 +104,9 @@ add_executable(tests
     common/fibers.cpp
     common/game_presets.cpp
     common/host_memory.cpp
+    common/host_memory_failure.cpp
+    common/host_memory_test_access.h
+    core/host_memory_failure.cpp
     common/page_table.cpp
     common/param_package.cpp
     common/range_map.cpp
@@ -162,6 +167,12 @@ endif()
 
 add_test(NAME tests COMMAND tests)
 
+if (TARGET SDL3::SDL3)
+    add_executable(sdl_window_state_tests yuzu_cmd/sdl_window_state.cpp)
+    target_link_libraries(sdl_window_state_tests PRIVATE SDL3::SDL3 Catch2::Catch2WithMain)
+    add_test(NAME sdl_window_state_tests COMMAND sdl_window_state_tests)
+endif()
+
 if (WIN32 AND ARCHITECTURE_x86_64)
     add_executable(event_wait_probe ../../tools/nx2/event_wait_probe.cpp)
     target_link_libraries(event_wait_probe PRIVATE common)
@@ -174,6 +185,9 @@ target_link_libraries(update_checker_tests PRIVATE common Catch2::Catch2WithMain
 add_test(NAME update_checker_tests COMMAND update_checker_tests)
 
 if (NOT ANDROID)
+    target_sources(tests PRIVATE input_common/joycon_subcommand_response.cpp)
+    target_link_libraries(tests PRIVATE SDL3::SDL3)
+
     add_executable(config_tests
         common/first_run_config.cpp
         ../frontend_common/config.cpp)
