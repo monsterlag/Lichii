@@ -1504,11 +1504,15 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             const u64 opaque =
                 split.OpaqueReadyPosition(&memory_manager, source, source + read_bytes);
             shadow_words.clear();
-            const bool complete = DeviceWords(source, words, [&](u32, std::optional<DAddr> device) {
+            const bool complete = DeviceWords(source, words, [&](u32 index, std::optional<DAddr> device) {
                 const auto it = device ? fs.cb_shadow.find(*device) : fs.cb_shadow.end();
+                const GPUVAddr address = source + u64{index} * sizeof(u32);
+                const u64 latest =
+                    split.ReadReadyPosition(&memory_manager, address, address + sizeof(u32));
                 // Only words still queued: memory has the others, maybe rewritten by the CPU.
+                // Another channel's known upload also supersedes this channel's shadow.
                 if (it == fs.cb_shadow.end() || it->second.position < opaque ||
-                    it->second.position <= consumed) {
+                    it->second.position < latest || it->second.position <= consumed) {
                     return false;
                 }
                 shadow_words.push_back(it->second.value);

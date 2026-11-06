@@ -64,6 +64,25 @@ struct GpuSplitTestAccess {
 
 } // namespace VideoCommon
 
+namespace Tegra::Engines {
+
+struct Maxwell3DTestAccess {
+    static void PrepareFront(Maxwell3D& engine, Core::System& system, VideoCommon::GpuSplit& split) {
+        engine.Front(system, split);
+    }
+
+    static u32 ReadFrontDma(Maxwell3D& engine, Core::System& system, VideoCommon::GpuSplit& split,
+                            GPUVAddr address) {
+        engine.FrontCallMethod(system, split, 0x154, static_cast<u32>(address >> 32), true);
+        engine.FrontCallMethod(system, split, 0x155, static_cast<u32>(address), true);
+        engine.FrontCallMethod(system, split, 0x156, 0, true);
+        engine.FrontDmaRead(split, engine.Front(system, split), 0, 0x157, 1);
+        return engine.native_data_ram[0];
+    }
+};
+
+} // namespace Tegra::Engines
+
 namespace {
 
 using Tegra::Engines::Maxwell3D;
@@ -722,6 +741,103 @@ TEST_CASE("Full split drains preserve aliased uploads, partial coverage and queu
     REQUIRE(f.memory.Read<u32>(gpu_address) == 1);
     REQUIRE(f.memory.Read<u32>(gpu_address + 0x1000) == 70);
     REQUIRE(f.memory.Read<u32>(alias + 4) == 60);
+}
+
+TEST_CASE("Front DMA rejects local constant buffer shadows superseded by another channel",
+          "[video_core][gpu_split_dependencies]") {
+    using Access = VideoCommon::GpuSplitTestAccess;
+    using FrontAccess = Tegra::Engines::Maxwell3DTestAccess;
+    Fixture f;
+    f.system.Initialize();
+    Kernel::KProcess process{f.system.Kernel()};
+    SCOPE_EXIT { f.system.Kernel().UnregisterKernelObject(&process); };
+    auto& table = process.GetPageTable().GetImpl();
+    table.Resize(20, 12);
+    constexpr VAddr cpu_address = 0x4000;
+    constexpr DAddr device_address = 0x10000;
+    constexpr GPUVAddr gpu_address = 0x100000;
+    constexpr GPUVAddr alias = 0x200000;
+    auto* backing = f.physical.GetPointerFromRaw<u8>(device_address);
+    table.entries.GetAndFault(cpu_address >> 12)
+        .Store(false, Common::PageType::Memory, 1,
+               reinterpret_cast<uintptr_t>(backing) - cpu_address);
+    process.GetMemory().SetCurrentPageTable(process);
+    const auto asid = f.device_memory.RegisterProcess(&process.GetMemory());
+    f.device_memory.BindInterface(&f.rasterizer);
+    f.device_memory.Map(device_address, cpu_address, 0x1000, asid);
+    SCOPE_EXIT {
+        f.device_memory.Unmap(device_address, 0x1000);
+        f.device_memory.UnregisterProcess(asid);
+    };
+    f.memory.BindRasterizer(&f.rasterizer);
+    f.memory.Map(gpu_address, device_address, 0x1000, Tegra::PTEKind::PITCH, false);
+    f.memory.Map(alias, device_address, 0x1000, Tegra::PTEKind::PITCH, false);
+    std::memset(backing, 0, 0x1000);
+
+    GPUVAddr second_address = gpu_address;
+    bool complete_before_read = false;
+    bool same_word = true;
+    bool same_block = true;
+    SECTION("same GPU address") {}
+    SECTION("aliased GPU address") {
+        second_address = alias;
+    }
+    SECTION("aliased writer already consumed") {
+        second_address = alias;
+        complete_before_read = true;
+    }
+    SECTION("different word in the same tracked block") {
+        second_address = alias + sizeof(u32);
+        same_word = false;
+    }
+    SECTION("unrelated tracked block") {
+        second_address = alias + 0x40;
+        same_word = false;
+        same_block = false;
+    }
+
+    VideoCommon::GpuSplit split;
+    Access::Start(split, f.system);
+    SCOPE_EXIT { split.Stop(); };
+    // Prepare both channels before queuing any work. The test ring publishes only on a wait.
+    FrontAccess::PrepareFront(f.fast, f.system, split);
+    FrontAccess::PrepareFront(f.slow, f.system, split);
+    const auto upload = [&](Maxwell3D& engine, GPUVAddr address, u32 value) {
+        const auto state = [&](u32 method, u32 argument) {
+            engine.FrontCallMethod(f.system, split, method, argument, true);
+        };
+        state(ShadowControl, 0);
+        state(CbAddressHigh, static_cast<u32>(address >> 32));
+        state(CbAddressLow, static_cast<u32>(address));
+        state(CbSize, sizeof(u32));
+        state(CbOffset, 0);
+        state(CbData, value);
+    };
+
+    upload(f.fast, gpu_address, 0x12345678);
+    REQUIRE(FrontAccess::ReadFrontDma(f.fast, f.system, split, gpu_address) == 0x12345678);
+    REQUIRE(split.Consumed() == 0);
+    REQUIRE(f.memory.Read<u32>(gpu_address) == 0);
+
+    upload(f.slow, second_address, 0x87654321);
+    const u64 latest_write = split.Position();
+    REQUIRE(split.Consumed() == 0);
+    REQUIRE(split.OpaqueReadyPosition(&f.memory, gpu_address, gpu_address + sizeof(u32)) == 0);
+    if (complete_before_read) {
+        split.Drain();
+        REQUIRE(split.Consumed() >= latest_write);
+    }
+    const u32 expected = same_word ? 0x87654321 : 0x12345678;
+    REQUIRE(FrontAccess::ReadFrontDma(f.fast, f.system, split, gpu_address) == expected);
+    if (same_word) {
+        REQUIRE(split.Consumed() >= latest_write);
+    } else if (!same_block) {
+        REQUIRE(split.Consumed() == 0);
+        REQUIRE(f.memory.Read<u32>(gpu_address) == 0);
+    }
+    split.Drain();
+    REQUIRE(f.memory.Read<u32>(gpu_address) == expected);
+    REQUIRE(f.memory.Read<u32>(second_address) == 0x87654321);
 }
 
 TEST_CASE("Split consumption does not complete deferred downstream callbacks",

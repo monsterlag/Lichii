@@ -3396,6 +3396,7 @@ private:
     // Split GPU thread, macros on the front (FrontCallMethod): the front's state, and whether
     // the front owns the macro code and bindings (the back thread then leaves them alone).
     struct FrontState;
+    friend struct Maxwell3DTestAccess;
     FrontState& Front(Core::System& system, VideoCommon::GpuSplit& split);
     void FrontWrite(VideoCommon::GpuSplit& split, FrontState& state, u32 method, u32 argument,
                     bool is_last_call, bool from_macro);
