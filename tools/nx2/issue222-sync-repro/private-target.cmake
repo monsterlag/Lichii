@@ -1,10 +1,21 @@
 # Include once at the END of src/CMakeLists.txt in a disposable cloud checkout.
 # This is deliberately not a production source change or CTest registration.
-if(NOT TARGET core OR NOT TARGET video_core)
+if(NOT TARGET core OR NOT TARGET video_core OR NOT TARGET frontend_common)
     message(FATAL_ERROR "Include this file after Lichii's normal source targets")
 endif()
-add_executable(issue222_sync_repro EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/repro.cpp")
-target_link_libraries(issue222_sync_repro PRIVATE common core video_core Threads::Threads
+
+# Normal GUI, CLI and test executables each provide their own VMA implementation.
+set(issue222_vma_source "${CMAKE_CURRENT_BINARY_DIR}/issue222_vma.cpp")
+file(GENERATE OUTPUT "${issue222_vma_source}" CONTENT
+    "#define VMA_IMPLEMENTATION\n#include \"video_core/vulkan_common/vma.h\"\n")
+add_executable(issue222_sync_repro EXCLUDE_FROM_ALL
+    "${CMAKE_CURRENT_LIST_DIR}/repro.cpp" "${issue222_vma_source}")
+if(NOT MSVC)
+    # Match the existing executables' VMA allowances without changing repro warnings.
+    set_source_files_properties("${issue222_vma_source}" PROPERTIES COMPILE_OPTIONS
+        "-Wno-conversion;-Wno-unused-variable;-Wno-unused-parameter;-Wno-missing-field-initializers")
+endif()
+target_link_libraries(issue222_sync_repro PRIVATE common core frontend_common video_core Threads::Threads
                                                 ${PLATFORM_LIBRARIES})
 if(TARGET SDL3::SDL3)
     target_link_libraries(issue222_sync_repro PRIVATE SDL3::SDL3)
