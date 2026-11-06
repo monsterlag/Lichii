@@ -11,6 +11,10 @@ jobs:
     name: Build and package the Windows MinGW PGO GUI and CLI
     runs-on: windows-2022
     timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3000M
+      CCACHE_COMPILERCHECK: content
     defaults:
       run:
         shell: msys2 {0}
@@ -41,6 +45,7 @@ jobs:
         run: test -s eglantine.profdata
 
       - name: Restore CPM downloads
+        id: cpm-cache
         uses: actions/cache/restore@v5
         with:
           path: .cache/cpm
@@ -49,6 +54,16 @@ jobs:
             cpm-windows-x86_64-pgo-v2-
             cpm-windows-x86_64-v2-
             cpm-Windows-
+
+      - name: Restore compiler objects
+        id: compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: objects-windows-x86_64-pgo-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            objects-windows-x86_64-pgo-v2-${{ github.sha }}-
+            objects-windows-x86_64-pgo-v2-
 
       - name: Configure MinGW PGO GUI, CLI and AV1 probe
         shell: msys2 {0}
@@ -80,6 +95,13 @@ jobs:
             "-DCMAKE_C_FLAGS=$profile" \
             "-DCMAKE_CXX_FLAGS=$profile"
 
+      - name: Save CPM downloads
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/cpm
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+
       # Match release-binaries.yml production parallelism; build 88 passed with this setting on windows-2022.
       - name: Build GUI, CLI and AV1 probe
         shell: msys2 {0}
@@ -89,6 +111,13 @@ jobs:
           cmake --build build/release --target yuzu yuzu-cmd --parallel
           cmake --build build/release --target av1_decode_smoke --parallel 2
           ccache --show-stats
+
+      - name: Save compiler objects
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       - name: Package GUI, CLI, Qt plugins and recursive DLL closure
         shell: msys2 {0}
@@ -130,37 +159,11 @@ jobs:
         shell: pwsh
         run: |
           $packageDir = Join-Path $env:GITHUB_WORKSPACE 'build/release/bin'
-          $report = Join-Path $packageDir 'AV1-DECODE-SMOKE.txt'
-          $oldPath = $env:PATH
-          try {
-            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-            Push-Location $packageDir
-            try {
-              'GUI loader check omitted: --help reaches StartupChecks and may run Vulkan/UI startup.' | Out-File -FilePath $report -Encoding utf8
-              $cliOutput = & ./eden-cli.exe --help 2>&1
-              $cliExitCode = $LASTEXITCODE
-              $cliOutput | Add-Content -Path $report
-              "CLI --help exit code: $cliExitCode" | Add-Content -Path $report
-              if ($cliExitCode -ne 0) {
-                throw "Packaged CLI --help failed: $cliExitCode"
-              }
-              $av1Output = & ./av1_decode_smoke.exe 2>&1
-              $av1ExitCode = $LASTEXITCODE
-              $av1Output | Add-Content -Path $report
-              "AV1 probe exit code: $av1ExitCode" | Add-Content -Path $report
-              if ($av1ExitCode -ne 0) {
-                throw "Packaged AV1 probe failed: $av1ExitCode"
-              }
-              Get-Content -LiteralPath $report
-              Remove-Item -LiteralPath ./av1_decode_smoke.exe
-              if (Test-Path -LiteralPath ./av1_decode_smoke.pdb) {
-                Remove-Item -LiteralPath ./av1_decode_smoke.pdb
-              }
-            } finally {
-              Pop-Location
-            }
-          } finally {
-            $env:PATH = $oldPath
+          ./tools/windows/check-av1-package.ps1 -PackageDirectory $packageDir
+          Remove-Item -LiteralPath (Join-Path $packageDir 'av1_decode_smoke.exe')
+          $probePdb = Join-Path $packageDir 'av1_decode_smoke.pdb'
+          if (Test-Path -LiteralPath $probePdb) {
+            Remove-Item -LiteralPath $probePdb
           }
 
       - name: Upload complete Windows MinGW PGO package and AV1 evidence
