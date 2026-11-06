@@ -152,7 +152,7 @@ jobs:
             deps "$dll"
           done
 
-      - name: Run Windows allocator and SDL regression tests
+      - name: Run Windows allocator, Joy-Con, color-mask and SDL regressions
         timeout-minutes: 3
         shell: pwsh
         run: |
@@ -161,8 +161,8 @@ jobs:
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
             Push-Location build/release/bin
             try {
-              & ./tests.exe '[host_memory_failure]'
-              if ($LASTEXITCODE -ne 0) { throw "Host-memory regression failed: $LASTEXITCODE" }
+              & ./tests.exe '[host_memory_failure],[joycon_reply],[fragment_color_mask]'
+              if ($LASTEXITCODE -ne 0) { throw "Issue-loop regressions failed: $LASTEXITCODE" }
               & ./sdl_window_state_tests.exe
               if ($LASTEXITCODE -ne 0) { throw "SDL state regression failed: $LASTEXITCODE" }
             } finally {

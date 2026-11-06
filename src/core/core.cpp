@@ -513,7 +513,9 @@ struct System::Impl {
     }
 
     void ShutdownMainProcess() {
+        LOG_INFO(Core, "Diagnostic shutdown phase: debug service");
         debug_service.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: platform notification");
         SetShuttingDown(true);
         Common::ADPF::Shutdown();
 
@@ -526,24 +528,34 @@ struct System::Impl {
         if (gpu_core)
             gpu_core->NotifyShutdown();
 
+        LOG_INFO(Core, "Diagnostic shutdown phase: stop requests and timing");
         stop_event.request_stop();
         core_timing.SyncPause(false);
         Network::CancelPendingSocketOperations();
+        LOG_INFO(Core, "Diagnostic shutdown phase: suspend emulation");
         kernel.SuspendEmulation(true);
+        LOG_INFO(Core, "Diagnostic shutdown phase: close services");
         kernel.CloseServices();
+        LOG_INFO(Core, "Diagnostic shutdown phase: shutdown cores");
         kernel.ShutdownCores();
+        LOG_INFO(Core, "Diagnostic shutdown phase: release service state");
         services.reset();
         service_manager.reset();
         fs_controller.Reset();
         cheat_engine.reset();
         core_timing.ClearPendingEvents();
         app_loader.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: audio");
         audio_core.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: GPU");
         gpu_core.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: host1x");
         host1x_core.reset();
         perf_stats.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: CPU manager");
         cpu_manager.Shutdown();
         debugger.reset();
+        LOG_INFO(Core, "Diagnostic shutdown phase: kernel");
         kernel.Shutdown();
         stop_event = {};
         Network::RestartSocketOperations();
@@ -556,6 +568,7 @@ struct System::Impl {
         // Reset all glue registrations
         arp_manager.ResetAll();
 
+        LOG_INFO(Core, "Diagnostic shutdown phase: complete");
         LOG_DEBUG(Core, "Shutdown OK");
     }
 

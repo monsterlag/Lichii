@@ -74,8 +74,11 @@ void EmuThread::run() {
     }
 
     // Shutdown the main emulated process
+    LOG_INFO(Frontend, "Diagnostic shutdown phase: emulation loop exited");
     QtCommon::system->DetachDebugger();
+    LOG_INFO(Frontend, "Diagnostic shutdown phase: debugger detached");
     QtCommon::system->ShutdownMainProcess();
+    LOG_INFO(Frontend, "Diagnostic shutdown phase: emulation thread complete");
 }
 
 void EmuThread::ReloadDiskShaderCache(u64 program_id) {
