@@ -94,6 +94,28 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
+      - name: Build and run private GPU shutdown wait reproducer
+        timeout-minutes: 3
+        env:
+          LICHII_DIAGNOSTIC_SOURCE_HEAD: ${{ github.sha }}
+        run: |
+          cmake --build build --target issue222_sync_repro --parallel 2
+          python3 -I tools/nx2/issue222-sync-repro/run.py \
+            build/issue222-private/Release/issue222_sync_repro
+
+      - name: Retain synthetic shutdown wait evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: issue222-sync-repro-${{ github.sha }}
+          path: |
+            build/issue222-private/Release/command.json
+            build/issue222-private/Release/stdout.log
+            build/issue222-private/Release/stderr.log
+            build/issue222-private/Release/result.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Test debug adapter
         run: python3 tools/nx2/test_debug_mcp.py
 

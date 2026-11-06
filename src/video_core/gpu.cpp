@@ -45,6 +45,14 @@
 namespace Tegra {
 
 struct GPU::Impl {
+    enum class SyncWaitKind : size_t {
+        CpuRead,
+        Invalidate,
+        Idle,
+        External,
+        Count,
+    };
+
     explicit Impl(Core::System& system_, bool is_async_, bool use_nvdec_)
         : system{system_}
         , gpu_thread{system_}
@@ -135,15 +143,24 @@ struct GPU::Impl {
         return current_sync_fence.load(std::memory_order_relaxed);
     }
 
-    void WaitForSyncOperation(const u64 fence) {
+    void WaitForSyncOperation(const u64 fence, SyncWaitKind kind = SyncWaitKind::External) {
+        const auto index = static_cast<size_t>(kind);
+        if (shutting_down.load(std::memory_order_relaxed) &&
+            !logged_wait_after_shutdown.exchange(true, std::memory_order_relaxed)) {
+            static constexpr std::array names{"cpu-read", "invalidate", "idle", "external"};
+            LOG_INFO(HW_GPU, "Diagnostic GPU wait entered after worker stop: kind={}, fence={}",
+                     names[index], fence);
+        }
         std::unique_lock lck{sync_request_mutex};
+        ++sync_waiters[index];
         sync_request_cv.wait(lck, [this, fence] { return CurrentSyncRequestFence() >= fence; });
+        --sync_waiters[index];
     }
 
     void WaitForIdle() {
         const u64 fence = RequestSyncOperation([] {});
         gpu_thread.TickGPU(is_async);
-        WaitForSyncOperation(fence);
+        WaitForSyncOperation(fence, SyncWaitKind::Idle);
     }
 
     /// Tick pending requests within the GPU.
@@ -179,9 +196,37 @@ struct GPU::Impl {
 
     void NotifyShutdown() {
         gpu_thread.NotifyShutdown();
-        std::unique_lock lk{sync_mutex};
-        shutting_down.store(true, std::memory_order::relaxed);
-        sync_cv.notify_all();
+        bool first_shutdown;
+        {
+            std::unique_lock lk{sync_mutex};
+            first_shutdown = !shutting_down.exchange(true, std::memory_order::relaxed);
+            sync_cv.notify_all();
+        }
+        if (first_shutdown) {
+            u64 requested{};
+            u64 completed{};
+            size_t queued{};
+            std::array<size_t, static_cast<size_t>(SyncWaitKind::Count)> waiters{};
+            bool snapshot_available;
+            {
+                std::unique_lock lk{sync_request_mutex, std::try_to_lock};
+                snapshot_available = lk.owns_lock();
+                if (snapshot_available) {
+                    requested = last_sync_fence;
+                    completed = CurrentSyncRequestFence();
+                    queued = sync_requests.size();
+                    waiters = sync_waiters;
+                }
+            }
+            if (snapshot_available) {
+                LOG_INFO(HW_GPU,
+                         "Diagnostic GPU workers stopped: requested={}, completed={}, queued={}, "
+                         "waiters cpu-read={}, invalidate={}, idle={}, external={}",
+                         requested, completed, queued, waiters[0], waiters[1], waiters[2], waiters[3]);
+            } else {
+                LOG_INFO(HW_GPU, "Diagnostic GPU workers stopped: sync snapshot lock unavailable");
+            }
+        }
     }
 
     /// Obtain the CPU Context
@@ -244,7 +289,7 @@ struct GPU::Impl {
             renderer->ReadRasterizer()->FlushRegion(raster_area.start_address, raster_area.end_address - raster_area.start_address);
         });
         gpu_thread.TickGPU(is_async);
-        WaitForSyncOperation(fence);
+        WaitForSyncOperation(fence, SyncWaitKind::CpuRead);
         return raster_area;
     }
 
@@ -258,7 +303,7 @@ struct GPU::Impl {
                     rasterizer->OnCacheInvalidation(addr, size);
                 });
                 gpu_thread.TickGPU(is_async);
-                WaitForSyncOperation(fence);
+                WaitForSyncOperation(fence, SyncWaitKind::Invalidate);
             }
             return;
         }
@@ -362,6 +407,8 @@ struct GPU::Impl {
     std::condition_variable sync_cv;
 
     std::list<std::function<void()>> sync_requests;
+    std::array<size_t, static_cast<size_t>(SyncWaitKind::Count)> sync_waiters{};
+    std::atomic_bool logged_wait_after_shutdown{};
     std::atomic<u64> current_sync_fence{};
     u64 last_sync_fence{};
 

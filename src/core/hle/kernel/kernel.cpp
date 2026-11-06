@@ -1226,6 +1226,7 @@ const Kernel::KSharedMemory& KernelCore::GetHidBusSharedMem() const {
 }
 
 void KernelCore::SuspendEmulation(bool suspended) {
+    LOG_INFO(Kernel, "Diagnostic suspend phase: enter; requested={}", suspended);
     const bool should_suspend{exception_exited || suspended};
     auto processes = GetProcessList();
 
@@ -1241,6 +1242,8 @@ void KernelCore::SuspendEmulation(bool suspended) {
         }
     }
 
+    LOG_INFO(Kernel, "Diagnostic suspend phase: requests complete; suspend={}, processes={}",
+             should_suspend, processes.size());
     if (!should_suspend) {
         return;
     }
@@ -1265,6 +1268,7 @@ void KernelCore::SuspendEmulation(bool suspended) {
         return true;
     };
 
+    LOG_INFO(Kernel, "Diagnostic suspend phase: entering scheduler wait");
     while (!TryWait()) {
         // ...
     }

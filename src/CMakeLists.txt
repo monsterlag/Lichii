@@ -308,3 +308,6 @@ if (ANDROID)
 endif()
 
 include(GenerateDepHashes)
+
+# Private diagnostic branch only; excluded from normal production build targets.
+include("${PROJECT_SOURCE_DIR}/tools/nx2/issue222-sync-repro/private-target.cmake")
