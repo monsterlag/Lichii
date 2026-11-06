@@ -91,6 +91,46 @@ jobs:
       - name: Build production and tests
         run: cmake --build build --parallel 4
 
+      - name: Test cross-channel front DMA shadow rejection
+        timeout-minutes: 5
+        run: >-
+          build/bin/tests --reporter compact
+          "Front DMA rejects local constant buffer shadows superseded by another channel"
+
+      - name: Prove cross-channel shadow fix against its parent implementation
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          baseline=cc808c195f966b5995564e74170ed3adef908919
+          git fetch --no-tags --depth=1 origin "$baseline"
+          engine_file=src/video_core/engines/maxwell_3d.cpp
+          restore_fixed_and_verify() {
+            local original_status=$?
+            trap - EXIT
+            git restore --worktree -- "$engine_file"
+            cmake --build build --target tests --parallel 4
+            build/bin/tests --reporter compact \
+              "Front DMA rejects local constant buffer shadows superseded by another channel"
+            exit "$original_status"
+          }
+          trap restore_fixed_and_verify EXIT
+
+          git restore --source="$baseline" --worktree -- "$engine_file"
+          cmake --build build --target tests --parallel 4
+          set +e
+          timeout 120s build/bin/tests --reporter compact \
+            "Front DMA rejects local constant buffer shadows superseded by another channel" \
+            > build/pr345-cross-channel-negative.log 2>&1
+          test_status=$?
+          set -e
+          cat build/pr345-cross-channel-negative.log
+          if [[ "$test_status" -ne 1 ]] || \
+             ! grep -Eq 'assertions:.*[1-9][0-9]* failed' build/pr345-cross-channel-negative.log || \
+             ! grep -Eq 'failed:.*FrontAccess::ReadFrontDma' build/pr345-cross-channel-negative.log; then
+            echo "Expected semantic assertion failures with exit 1; got $test_status."
+            exit 1
+          fi
+
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
