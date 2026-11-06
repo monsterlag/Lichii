@@ -70,10 +70,11 @@ struct Fixture {
 
 TEST_CASE("Maxwell front ownership returns to direct methods across accuracy changes",
           "[video_core][split_front_restart]") {
+    using Tegra::Engines::Maxwell3D;
     const bool fast_methods = GENERATE(false, true);
     const bool multi = GENERATE(false, true);
     Fixture f;
-    Tegra::Engines::Maxwell3D engine{f.memory};
+    Maxwell3D engine{f.memory};
     SCOPE_EXIT { f.split.Stop(); };
     engine.BindRasterizer(&f.rasterizer);
     engine.fast_maxwell3d = fast_methods;
