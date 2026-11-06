@@ -1,0 +1,12 @@
+name: Windows MinGW PGO package
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  full-package:
+    uses: ./.github/workflows/build88-windows-mingw-pgo.yml
