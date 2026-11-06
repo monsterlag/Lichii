@@ -1,0 +1,197 @@
+name: Issue-loop Windows MinGW PGO integration
+
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+
+jobs:
+  windows-mingw-pgo:
+    name: Build and package the Windows MinGW PGO GUI and CLI
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3000M
+      CCACHE_COMPILERCHECK: content
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            git make autoconf libtool automake-wrapper patch jq pactoys ninja
+          pacboy: >-
+            toolchain:p clang:p lld:p cmake:p python-pip:p
+            qt6-base:p qt6-charts:p qt6-tools:p qt6-translations:p qt6-svg:p
+            openssl:p boost:p fmt:p lz4:p nlohmann-json:p zlib:p zstd:p libiconv:p
+            vulkan-memory-allocator:p vulkan-devel:p glslang:p enet:p opus:p
+            libusb:p unordered_dense:p jbigkit:p xz:p libdeflate:p bzip2:p
+            lerc:p graphite2:p libwebp:p libtiff:p brotli:p ccache:p ffmpeg:p
+
+      - name: Check PGO profile
+        shell: msys2 {0}
+        run: test -s eglantine.profdata
+
+      - name: Restore CPM downloads
+        id: cpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/cpm
+          key: cpm-windows-x86_64-pgo-v2-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'CMakeModules/CPM*.cmake', 'externals/**/CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-windows-x86_64-pgo-v2-
+            cpm-windows-x86_64-v2-
+            cpm-Windows-
+
+      - name: Restore compiler objects
+        id: compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: objects-windows-x86_64-pgo-v2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            objects-windows-x86_64-pgo-v2-${{ github.sha }}-
+            objects-windows-x86_64-pgo-v2-
+
+      - name: Configure MinGW PGO GUI, CLI, tests and AV1 probe
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          profile="-fprofile-use=$(cygpath -m "$PWD/eglantine.profdata") -Wno-backend-plugin \
+            -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+          cmake -S . -B build/release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DYUZU_TESTS=ON \
+            -DLICHII_AV1_SMOKE_TEST=ON \
+            -DYUZU_CMD=ON \
+            -DYUZU_ROOM=OFF \
+            -DYUZU_ROOM_STANDALONE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF \
+            -DYUZU_USE_BUNDLED_SDL3=ON \
+            -DYUZU_USE_BUNDLED_FFMPEG=OFF \
+            -DVulkanHeaders_FORCE_BUNDLED=ON \
+            -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
+            -DENABLE_UPDATE_CHECKER=ON \
+            -DLICHII_BUILD_TAG=manual-${{ github.run_number }} \
+            -DLICHII_BUILD_PLATFORM=windows-x86_64-pgo \
+            -DUSE_DISCORD_PRESENCE=OFF \
+            -DUSE_CCACHE=ON \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
+            "-DCMAKE_C_FLAGS=$profile" \
+            "-DCMAKE_CXX_FLAGS=$profile"
+
+      - name: Save CPM downloads
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/cpm
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+
+      # Match release-binaries.yml production parallelism; build 88 passed with this setting on windows-2022.
+      - name: Build GUI, CLI, focused tests and AV1 probe
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          ccache --zero-stats
+          cmake --build build/release --target yuzu yuzu-cmd --parallel
+          cmake --build build/release --target tests sdl_window_state_tests --parallel 2
+          cmake --build build/release --target av1_decode_smoke --parallel 2
+          ccache --show-stats
+
+      - name: Save compiler objects
+        if: always() && steps.compiler-cache.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      - name: Package GUI, CLI, Qt plugins and recursive DLL closure
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/ucrt64/bin:$PATH"
+          cd build/release/bin
+          test -f lichii.exe
+          test -f eden-cli.exe
+          test -f av1_decode_smoke.exe
+          windeployqt6 --no-translations --no-compiler-runtime --no-opengl-sw \
+            --no-system-dxc-compiler --no-system-d3d-compiler lichii.exe
+          deps() {
+            objdump -p "$1" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
+              [ -z "$dll" ] && continue
+              source=$(command -v "$dll" 2>/dev/null || true)
+              [ -z "$source" ] && continue
+              case "$source" in
+                *System32* | *SysWOW64*) continue ;;
+              esac
+              if [ ! -f "$dll" ]; then
+                cp "$source" "$dll"
+                deps "$source"
+              fi
+            done
+          }
+          for exe in lichii.exe eden-cli.exe tests.exe sdl_window_state_tests.exe av1_decode_smoke.exe; do
+            deps "$exe"
+          done
+          find . -name '*.dll' -print0 | while IFS= read -r -d '' dll; do
+            deps "$dll"
+          done
+
+      - name: Run Windows allocator and SDL regression tests
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $oldPath = $env:PATH
+          try {
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            Push-Location build/release/bin
+            try {
+              & ./tests.exe '[host_memory_failure]'
+              if ($LASTEXITCODE -ne 0) { throw "Host-memory regression failed: $LASTEXITCODE" }
+              & ./sdl_window_state_tests.exe
+              if ($LASTEXITCODE -ne 0) { throw "SDL state regression failed: $LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
+          } finally {
+            $env:PATH = $oldPath
+          }
+
+      # CLI --help exits before System::Initialize. GUI --help is unsuitable: main() runs
+      # StartupChecks (including the Vulkan check) before MainWindow parses arguments, so it
+      # would start GUI/Vulkan work instead of exiting as a loader-only check.
+      - name: Run packaged CLI and AV1 checks with system-only PATH
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $env:GITHUB_WORKSPACE 'build/release/bin'
+          ./tools/windows/check-av1-package.ps1 -PackageDirectory $packageDir
+          Remove-Item -LiteralPath (Join-Path $packageDir 'av1_decode_smoke.exe')
+          $probePdb = Join-Path $packageDir 'av1_decode_smoke.pdb'
+          if (Test-Path -LiteralPath $probePdb) {
+            Remove-Item -LiteralPath $probePdb
+          }
+
+      - name: Upload complete Windows MinGW PGO package and AV1 evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: lichii-issue-loop-windows-x86_64-pgo-${{ github.sha }}
+          path: build/release/bin/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
