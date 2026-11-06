@@ -1,4 +1,4 @@
-name: Build 93 player Windows MinGW PGO integration
+name: Build 93 front ownership Windows MinGW PGO integration
 
 on:
   workflow_dispatch:
@@ -161,6 +161,28 @@ jobs:
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
             Push-Location build/release/bin
             try {
+              $splitEnvNames = @(
+                'EDEN_NX2_SPLIT',
+                'EDEN_NX2_MME_JIT',
+                'EDEN_NX2_SPLIT_SKIP',
+                'EDEN_NX2_SKIP_SAME'
+              )
+              $oldSplitEnv = @{}
+              foreach ($name in $splitEnvNames) {
+                $oldSplitEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+              }
+              try {
+                $env:EDEN_NX2_SPLIT = '2'
+                $env:EDEN_NX2_MME_JIT = '1'
+                $env:EDEN_NX2_SPLIT_SKIP = '1'
+                $env:EDEN_NX2_SKIP_SAME = '1'
+                & ./tests.exe '[video_core][split_front_restart]'
+                if ($LASTEXITCODE -ne 0) { throw "Split-front restart regression failed: $LASTEXITCODE" }
+              } finally {
+                foreach ($name in $splitEnvNames) {
+                  [Environment]::SetEnvironmentVariable($name, $oldSplitEnv[$name], 'Process')
+                }
+              }
               & ./tests.exe '[host_memory_failure],[joycon_reply],[fragment_color_mask],[min_max_denorms]'
               if ($LASTEXITCODE -ne 0) { throw "Issue-loop regressions failed: $LASTEXITCODE" }
               & ./sdl_window_state_tests.exe
@@ -190,7 +212,7 @@ jobs:
       - name: Upload complete Windows MinGW PGO package and AV1 evidence
         uses: actions/upload-artifact@v7
         with:
-          name: lichii-build93-player-windows-x86_64-pgo-${{ github.sha }}
+          name: lichii-build93-front-reset-windows-x86_64-pgo-${{ github.sha }}
           path: build/release/bin/
           if-no-files-found: error
           compression-level: 0

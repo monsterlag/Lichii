@@ -91,6 +91,62 @@ jobs:
       - name: Build production and tests
         run: cmake --build build --parallel 4
 
+      - name: Test split front restart
+        timeout-minutes: 5
+        run: |
+          EDEN_NX2_SPLIT=2 \
+          EDEN_NX2_MME_JIT=1 \
+          EDEN_NX2_SPLIT_SKIP=1 \
+          EDEN_NX2_SKIP_SAME=1 \
+            build/bin/tests --reporter compact "[video_core][split_front_restart]"
+
+      - name: Prove split front restart fails without the engine fix
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          baseline=09b78bd2dfdd279cc81caed2a794ed85062725c9
+          git fetch --no-tags --depth=1 origin "$baseline"
+          engine_files=(
+            src/video_core/engines/maxwell_3d.cpp
+            src/video_core/engines/maxwell_3d.h
+            src/video_core/engines/kepler_compute.cpp
+            src/video_core/engines/kepler_compute.h
+          )
+          restore_fixed_and_verify() {
+            local original_status=$?
+            trap - EXIT
+            git restore --worktree -- "${engine_files[@]}"
+            cmake --build build --target tests --parallel 4
+            EDEN_NX2_SPLIT=2 \
+            EDEN_NX2_MME_JIT=1 \
+            EDEN_NX2_SPLIT_SKIP=1 \
+            EDEN_NX2_SKIP_SAME=1 \
+              build/bin/tests --reporter compact "[video_core][split_front_restart]"
+            exit "$original_status"
+          }
+          trap restore_fixed_and_verify EXIT
+
+          git restore --source="$baseline" --worktree -- "${engine_files[@]}"
+          cmake --build build --target tests --parallel 4
+          set +e
+          timeout 120s env \
+            EDEN_NX2_SPLIT=2 \
+            EDEN_NX2_MME_JIT=1 \
+            EDEN_NX2_SPLIT_SKIP=1 \
+            EDEN_NX2_SKIP_SAME=1 \
+            build/bin/tests --reporter compact "[video_core][split_front_restart]" \
+            > build/split-front-negative.log 2>&1
+          test_status=$?
+          set -e
+          cat build/split-front-negative.log
+          if [[ "$test_status" -ne 1 ]] || \
+             ! grep -Eq 'assertions:.*[1-9][0-9]* failed' build/split-front-negative.log || \
+             ! grep -Eq 'failed:.*engine\.GetNativeMacroEngine\(\)\.native_code\[13\]' build/split-front-negative.log || \
+             ! grep -Eq 'failed:.*positions\[3\]' build/split-front-negative.log; then
+            echo "Expected semantic assertion failures with exit 1; got $test_status."
+            exit 1
+          fi
+
       - name: Run tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
 
