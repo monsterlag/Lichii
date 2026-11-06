@@ -278,6 +278,7 @@ public:
     void FlushAndInvalidateRegion(DAddr addr, u64 size);
 
 private:
+    friend class Issue222TestAccess;
     struct Impl;
     mutable std::unique_ptr<Impl> impl;
 };

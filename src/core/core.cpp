@@ -1156,3 +1156,7 @@ void System::ApplySettings() {
 }
 
 } // namespace Core
+
+#ifdef LICHII_ISSUE222_WORKER_REPRO
+#include "../../tools/nx2/issue222-sync-repro/system-fixture.inc"
+#endif

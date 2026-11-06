@@ -644,3 +644,7 @@ void GPU::FlushAndInvalidateRegion(DAddr addr, u64 size) {
 }
 
 } // namespace Tegra
+
+#ifdef LICHII_ISSUE222_WORKER_REPRO
+#include "../../tools/nx2/issue222-sync-repro/gpu-access.inc"
+#endif

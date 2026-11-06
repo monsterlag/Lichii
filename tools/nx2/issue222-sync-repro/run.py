@@ -13,6 +13,7 @@ executable = Path(sys.argv[1]).resolve(strict=True)
 portable = executable.parent / "user"
 portable.mkdir()  # Refuse reuse of any existing directory/profile.
 environment = os.environ.copy()
+environment["EDEN_NX2_SPLIT"] = "0"
 for variable in ("HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"):
     destination = portable / variable.lower()
     destination.mkdir()
@@ -29,7 +30,7 @@ except subprocess.TimeoutExpired as error:
 (output / "stdout.log").write_text(result.stdout)
 (output / "stderr.log").write_text(result.stderr)
 (output / "result.json").write_text(json.dumps({"exit_code": result.returncode,
-    "source_base": "01442dca1e8539da8b59061c5583bfcfba5d2c7a",
+    "source_base": "41d5b2396ed8e50a71f1f8da0c16ba75d8495c20",
     "diagnostic_build_head": environment.get("LICHII_DIAGNOSTIC_SOURCE_HEAD")}, indent=2) + "\n")
 print(result.stdout, end="")
 print(result.stderr, end="", file=sys.stderr)

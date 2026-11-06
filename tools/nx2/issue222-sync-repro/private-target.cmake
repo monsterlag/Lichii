@@ -1,8 +1,17 @@
 # Include once at the END of src/CMakeLists.txt in a disposable cloud checkout.
-# This is deliberately not a production source change or CTest registration.
+# This is deliberately not a CTest registration or an ordinary build target.
+option(LICHII_ISSUE222_WORKER_REPRO "Build the private started-GPU-worker diagnostic" OFF)
+if(NOT LICHII_ISSUE222_WORKER_REPRO)
+    return()
+endif()
+
 if(NOT TARGET core OR NOT TARGET video_core OR NOT TARGET frontend_common)
     message(FATAL_ERROR "Include this file after Lichii's normal source targets")
 endif()
+
+# These includes add fixture construction and read-only metadata access only.
+target_compile_definitions(core PRIVATE LICHII_ISSUE222_WORKER_REPRO)
+target_compile_definitions(video_core PRIVATE LICHII_ISSUE222_WORKER_REPRO)
 
 # Normal GUI, CLI and test executables each provide their own VMA implementation.
 set(issue222_vma_source "${CMAKE_CURRENT_BINARY_DIR}/issue222_vma.cpp")

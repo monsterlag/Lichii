@@ -20,6 +20,7 @@
 #include "video_core/framebuffer_config.h"
 
 namespace Tegra {
+class Issue222TestAccess;
 struct FramebufferConfig;
 namespace Control {
 class Scheduler;
@@ -140,6 +141,7 @@ public:
     void NotifyShutdown();
 
 private:
+    friend class Tegra::Issue222TestAccess;
     /// Pushes a command to be executed by the GPU thread
     u64 PushCommand(CommandData&& command_data, bool block, bool is_async);
 
